@@ -1,0 +1,326 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace klient_lab8
+{
+    class Program
+    {
+        private static Socket _gniazdoKlienta = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+        private static string OperaC = string.Empty;    //operacja wykonywana przez serwer
+        private static string StatuS = string.Empty;    //?
+        private static string IdentY = string.Empty;    //identyfikator klienta, tworzony przez serwer
+        private static string GodziN = string.Empty;    //aktualna godzina
+        private static float arg1 = 0, arg2 = 0, arg3 = 0, wynik = 0;           //argumenty do operacji oraz wynik tej operacji EDIT: może w ogóle nie będą potrzebne floaty u klienta?
+        private static string x = "0", y = "0", z = "0", w = "0";
+        private static string NiedoZ = string.Empty;    //do zwracania błędów
+        private static string KonieC = string.Empty;    //jeśli to pole będzie wypełnione, to oznacza to zamiar kończenia transmisji przez klienta
+
+        static void Main(string[] args)
+        {
+            Console.Title = "Klient";
+            Polacz();
+            odbierz_identyfikator();
+            Wyslij();
+            Console.ReadLine();
+        }
+
+        private static void odbierz_identyfikator()
+        {
+            byte[] bufor_odbieranie = new byte[1024];
+            int ile_odbierz = _gniazdoKlienta.Receive(bufor_odbieranie);
+            byte[] dane = new byte[ile_odbierz];
+            Array.Copy(bufor_odbieranie, dane, ile_odbierz);
+            Console.WriteLine("Odebrano identyfikator : " + Encoding.ASCII.GetString(dane));
+            string identyfik = Encoding.ASCII.GetString(dane);
+            for (int i = 0, licznik = 0; i < identyfik.Length; i++) //analiza przyjęc=tego komunikatu, czyli przechodzenie forem po całym odebranym tekście.
+            {
+                if (identyfik[i] == '>' && identyfik[i + 1] == '>' && licznik == 2) 
+                {
+                    i = i + 2;
+                    while (identyfik[i] != '^')
+                    {
+                        IdentY += identyfik[i];
+                        i++;
+                    }
+                }
+            }
+        }
+
+        private static void Wyslij()    //funkcja wysyłająca do serwera, w pętli nieskończonej
+        {
+            string komunikat = string.Empty;    //to jest string, do którego będe wpisywał wszystkie pola i go wysyłał
+            string koniec = string.Empty;
+            while (true)
+            {
+                wyczysc_pola();
+                //Thread.Sleep(1000);
+                //byte[] bufor = Encoding.ASCII.GetBytes("get time"); //na próbę: wysyłanie na sztywno polecenia co 1 sekundę
+                OperaC = podaj_operacje();  //w tym stringu jest teraz nazwa operacji wczytana z konsoli
+                komunikat = "OperaC>>" + OperaC + "^";    //wpisnie pola operacji do komunikatu
+                StatuS = "Zadanie";
+                komunikat = komunikat + "StatuS>>" + StatuS + "^";
+                komunikat = komunikat + "IdentY>>" + IdentY + "^";
+                GodziN = DateTime.Now.ToLongTimeString();
+                komunikat = komunikat + "GodziN>>" + GodziN + "^";
+                podaj_argumenty();
+                komunikat = komunikat + "ArguM1>>" + x + "^";
+                komunikat = komunikat + "ArguM2>>" + y + "^";
+                komunikat = komunikat + "ArguM3>>" + z + "^";
+                komunikat = komunikat + "WynikK>>" + w + "^";
+                komunikat = komunikat + "NiedoZ>>" + NiedoZ + "^";
+                komunikat = komunikat + "KonieC>>" + KonieC + "^";
+
+                byte[] bufor = Encoding.ASCII.GetBytes(komunikat);    //bufor do wysyłania danych
+                _gniazdoKlienta.Send(bufor);    //wysyłanie danych do serwera
+                wyczysc_pola();
+                byte[] bufor_odbieranie = new byte[1024];
+                int ile_odbierz = _gniazdoKlienta.Receive(bufor_odbieranie);
+                byte[] dane = new byte[ile_odbierz];
+                Array.Copy(bufor_odbieranie, dane, ile_odbierz);
+                string odebrano = Encoding.ASCII.GetString(dane);
+                odbierz_dane(odebrano); //wyłuskiwanie poszczególnych pól z całego odebranego od serwera komunikatu
+                wyswietl_pola();
+                do
+                {
+                    Console.WriteLine("Czy zakonczyc polaczenie? (T/N)");   //po każdym wysłaniu komundy i odebraniu zwrotu od serwera, będzie pytanie o zakończenie połaczenia
+                    koniec = Console.ReadLine();
+                    if (koniec == "T")
+                    {
+                        string zakoncz = "OperaC>>^StatuS>>Zakoncz^IdentY>>" + IdentY + "^GodziN>>" + DateTime.Now.ToLongTimeString() + "^ arg1>>0^arg2>>0^arg3>>0^wynik>>0^NiedoZ>>^KonieC>>koniec^";  //jedyne pole z jakąś wartością, to pole KonieC
+                        bufor = Encoding.ASCII.GetBytes(zakoncz);
+                        _gniazdoKlienta.Send(bufor);
+                        // Console.WriteLine("wyslano do serwera infomracje o zakonczeniu polaczenia");    //zakomentować całą linię
+                        _gniazdoKlienta.Shutdown(SocketShutdown.Receive);  //both, czyli zamykam dla obu kierunków: odbierania i wysyłania
+                        _gniazdoKlienta.Close();
+                        Console.WriteLine("Zakonczono polaczenie");
+                        return;
+                    }
+                    else if (koniec == "N")
+                    {
+                        break;
+                    }
+                    else if (koniec == "t" || koniec == "n")
+                    {
+                        Console.WriteLine("Uzyj wielkich liter!");
+                        continue;
+                    }
+                    else
+                    {
+                        Console.WriteLine("Wpisz T lub N");
+                    }
+
+                }
+                while (koniec != "T" || koniec != "N");
+
+
+            }
+        }
+
+        private static void wyczysc_pola()
+        {
+            OperaC = string.Empty;
+            StatuS = string.Empty;
+            //IdentY = string.Empty;
+            GodziN = string.Empty;
+            arg1 = arg2 = arg3 = wynik = 0;
+            NiedoZ = string.Empty;
+            KonieC = string.Empty;
+        }
+
+        private static void wyswietl_pola()
+        {
+            Console.WriteLine("Odpowiedz serwera: ");
+            Console.WriteLine("Status: " + StatuS);
+            Console.WriteLine("GodziN: " + GodziN);
+            Console.WriteLine("argument 1: " + arg1);
+            Console.WriteLine("argument 2: " + arg2);
+            Console.WriteLine("argumnet 3: " + arg3);
+            Console.WriteLine("wynik operacji: " + wynik);
+            Console.WriteLine("Wykryte bledy: " + NiedoZ);
+        }
+
+        private static void odbierz_dane(string tekst)
+        {
+            for (int i = 0, licznik = 0; i < tekst.Length; i++) //analiza przyjęc=tego komunikatu, czyli przechodzenie forem po całym odebranym tekście.
+            {
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 0)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    while (tekst[i] != '^')
+                    {
+                        OperaC += tekst[i];
+                        i++;
+                    }
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 1)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    while (tekst[i] != '^')
+                    {
+                        StatuS += tekst[i];
+                        i++;
+                    }
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 2)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    string falszywy_identyfikator = string.Empty;
+                    i = i + 2;
+                    while (tekst[i] != '^')
+                    {
+                        falszywy_identyfikator += tekst[i];
+                        i++;
+                    }
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 3)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    while (tekst[i] != '^')
+                    {
+                        GodziN += tekst[i];
+                        i++;
+                    }
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 4)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    x = string.Empty;
+                    while (tekst[i] != '^')
+                    {
+                        x += tekst[i];
+                        i++;
+                    }
+                    arg1 = Convert.ToSingle(x); //konwersja string -> float
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 5)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    y = string.Empty;
+                    while (tekst[i] != '^')
+                    {
+                        y += tekst[i];
+                        i++;
+                    }
+                    arg2 = Convert.ToSingle(y); //konwersja string -> float
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 6)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    z = string.Empty;
+                    while (tekst[i] != '^')
+                    {
+                        z += tekst[i];
+                        i++;
+                    }
+                    arg3 = Convert.ToSingle(z); //konwersja string -> float
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 7)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    w = string.Empty;
+                    while (tekst[i] != '^')
+                    {
+                        w += tekst[i];
+                        i++;
+                    }
+                    wynik = Convert.ToSingle(w); //konwersja string -> float
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 8)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    while (tekst[i] != '^')
+                    {
+                        NiedoZ += tekst[i];
+                        i++;
+                    }
+
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 9)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    while (tekst[i] != '^')
+                    {
+                        KonieC += tekst[i];
+                        i++;
+                    }
+                    licznik++;
+                }
+            }
+        }
+        private static void podaj_argumenty()
+        {
+            Console.Write("Podaj wartosc pierwszego argumentu: ");
+            x = Console.ReadLine();
+            Console.Write("Podaj wartosc drugiego argumentu: ");
+            y = Console.ReadLine();
+            Console.Write("Podaj wartosc trzeciego argumentu: ");
+            z = Console.ReadLine();
+        }
+
+        private static string podaj_operacje()
+        {
+            bool jest_ok = false;
+            string operacja = string.Empty;     //jeśli coś nie będzie działać, tzn że ten while jest spierdolony, bo z poczatku łapało tego stringa z return jako niezainicjowany, a on przecież w whilu powinien zostać zainicjowany
+            while (jest_ok == false)
+            {
+                Console.Write("Podaj nazwe operacji: ");
+                operacja = Console.ReadLine();    //wczytanie z konsoli do stringa
+                if (operacja.Length != 3)
+                {
+                    Console.Write("Nazwa operacji musi miec 3 litery!");
+                    jest_ok = false;
+                    continue;
+                }
+                if (operacja.First() >= 97 && operacja.Last() <= 122)
+                {
+                    Console.Write("Nazwa operacji musi zaczynac sie z wielkiej litery!");
+                    jest_ok = false;
+                    continue;
+                }
+                if ((operacja[1] >= 65 && operacja[1] <= 90) || (operacja[2] >= 65 && operacja[2] <= 90))    //troche przydługi if, ale jak był krótki if zagnieżdżony w forze, to continue nie wychodził z fora, robił się syf i ogólnie to nie mam sił ani ochoty się z tym paprać
+                {
+                    Console.Write("Tylko pierwsza litera moze byc wielka!");
+                    jest_ok = false;
+                    continue;
+                }
+                jest_ok = true;
+            }
+            return operacja;
+        }
+
+        private static void Polacz()    //funkcja próbująca stale połaczyć się z serwerem(przez cały czas wykonywania programu, aż się w końcu połaczy)
+        {
+            int proby_polaczenia = 0;   //licznik, ile razy klient próbował się połaczyć z serwerem
+            while (!_gniazdoKlienta.Connected)
+            {
+                try
+                {
+                    proby_polaczenia++;
+                    _gniazdoKlienta.Connect(IPAddress.Loopback, 100);   //100 to numer portu, na potrzeby sporządzenia sprawozdania połączenie będzie na pętli zwrotnej
+                }
+                catch (SocketException)
+                {
+                    Console.Clear();    //zabieg kosmetyczny, żeby kolejne komunikaty o nieudanym połaczeniu nakładały się na siebie w kosoli
+                    Console.WriteLine("Liczba prob nawiazania polaczenia: " + proby_polaczenia.ToString());
+                }
+            }
+            // Console.Clear();    //kiedy już klient się połączy, czyszczę konsole
+            Console.WriteLine("Polaczono z serwerem");
+
+        }
+    }
+}
