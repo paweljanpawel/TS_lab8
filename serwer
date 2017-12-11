@@ -1,0 +1,318 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Net;
+using System.Net.Sockets;
+using System.Text;
+using System.Threading.Tasks;
+
+namespace serwer_lab8
+{
+    class Program
+    {
+        //zmienne globalne:
+        private static byte[] _bufor = new byte[1024];  //bufor na sdane
+        private static List<Socket> _gniazdaKlientow = new List<Socket>();    //lista podłączonych klientów
+        private static Socket _socketSerwera = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);    //tworzenie gniazda dla serwera
+
+        private static string OperaC = string.Empty;    //operacja wykonywana przez serwer
+        private static string StatuS = string.Empty;    //?
+        private static string IdentY = string.Empty;    //identyfikator klienta, tworzony przez serwer
+        private static string GodziN = string.Empty;    //aktualna godzina
+        private static float arg1, arg2, arg3, wynik;           //argumenty do operacji oraz wynik tej operacji
+        private static string x = "0", y = "0", z = "0", w = "0";   //też argumenty, ale w tej postaci są wysyłane
+        private static string NiedoZ = string.Empty;    //do zwracania błędów
+        private static string KonieC = string.Empty;    //jeśli to pole będzie wypełnione, to oznacza to zamiar kończenia transmisji przez klienta
+        private static List<int> id = new List<int>();
+        static void Main(string[] args)
+        {
+            id.Add(0);  //takie tam wpisanie 0 do listy identyfikatorów
+            Console.Title = "Serwer";   //tytuł w konsoli, taka pierdółka
+            UtworzSerwer();
+            Console.ReadLine(); //na ten moment  nic nie wstrzymuje głównego wątku, czyli UtworzSerwer(). Inne wątki działaja w tle. Kiedy główny się zakończy, konsola sie zamknie, dlatego jest tu ta linia - konsola zamknie sie dopiero po wciśnieciu Enter
+        }
+        private static void UtworzSerwer()
+        {
+            Console.WriteLine("Stawianie serwera...");
+            _socketSerwera.Bind(new IPEndPoint(IPAddress.Any, 100));    //tu nie działało, póki nie dodałem using SYstem.Net
+            _socketSerwera.Listen(5);   //backlog sie nie liczy; backlog nie definiuje, ilu klientów naraz może być obsługiwanych, tylko ile połączeń może być w toku. powyżej 5 będą odrzucane, wat??? dotyczać, bo nie zrozumiałem tego z całą pewnością
+            _socketSerwera.BeginAccept(new AsyncCallback(Polaczenie), null);  //serwer zaczyna nasłuchiwać
+
+        }
+        private static void Polaczenie(IAsyncResult AR)
+        {
+
+                Socket gniazdo = _socketSerwera.EndAccept(AR);  //przypisanie gniazda do danego połączenia
+                _gniazdaKlientow.Add(gniazdo);  //dodanie klienta do listy połączonych klientów
+                Console.WriteLine("Klient polaczyl sie z serwerem");
+                //wyslanie indetyfikatora
+                IdentY = przydziel_identyfikator();
+                Console.WriteLine(IdentY);
+                string identyfikator = spakuj_pola();
+                byte[] dane = Encoding.ASCII.GetBytes(identyfikator);
+                gniazdo.BeginSend(dane, 0, dane.Length, SocketFlags.None, new AsyncCallback(OdpowiedzNaWyslanie), gniazdo);
+                //wysłanie identyfikatora zakończone
+                gniazdo.BeginReceive(_bufor, 0, _bufor.Length, SocketFlags.None, new AsyncCallback(Odbior), gniazdo);   //po dodaniu klienta zaczynam odbierać od niego dane
+                _socketSerwera.BeginAccept(new AsyncCallback(Polaczenie), null);  //w tym momencie serwer nie akceptowałby już kolejnych połączeń, dlatego .BeginAccept tutaj umożliwa nawiązywanie kolejnych połączeń
+            
+            
+        }
+        private static void Odbior(IAsyncResult AR)
+        {
+            try
+            {
+                wyzeruj_pola();
+                Socket gniazdo = (Socket)AR.AsyncState; //to gniazdo to jest to, które dodałem do listy klientów w Polaczenie()
+                int odebrane = gniazdo.EndReceive(AR);  //
+                byte[] buforDanych = new byte[odebrane];    //tymczasowy bufor o rozmiarze "odebrane"
+                Array.Copy(_bufor, buforDanych, odebrane);  //kopiuję odpowiednią liczbę bajtów do buforDanych z globalnego _bufor
+                string tekst = Encoding.ASCII.GetString(buforDanych);   //tu będzie wpisany odebrany tekst
+                odbierz(tekst);     //rozdzielanie odebranego komunikatu na poszczególne pola
+                Console.WriteLine("Klient o identyfikatorze: " + IdentY + " przyslal komunikat");
+                //wyswietl_pola();
+                if (KonieC == "koniec")  //"koniec" to specjalny komunikat od klienta informujący o kończeniu rozłaczaniu się przez niego
+                {
+                    Console.WriteLine("Klient o identyfikatorze: " + IdentY + " zakonczyl polaczenie");
+                    gniazdo.Close();    //jeśli przyszedł komunikat "koniec", serwer zamyka gniazdo
+                }
+                else    //jeśli komunikat ma inną treść, niż "koniec", to serwer normalnie go wczytuje, itd.
+                {
+                    wykonaj_zadanie();
+                    wyswietl_pola();
+                    string odpowiedz = spakuj_pola();
+                    byte[] dane = Encoding.ASCII.GetBytes(odpowiedz); //zapisanie daty do bufora
+                    gniazdo.BeginSend(dane, 0, dane.Length, SocketFlags.None, new AsyncCallback(OdpowiedzNaWyslanie), gniazdo);    //wysłanie danych do klienta
+                    odpowiedz = string.Empty;
+                    gniazdo.BeginReceive(_bufor, 0, _bufor.Length, SocketFlags.None, new AsyncCallback(Odbior), gniazdo);   //dalej odbieram dane od klienta
+                }
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine("Uwaga! Klient nieoczekiwanie utracil polaczenie");
+            }
+        }
+
+        private static void wyswietl_pola()
+        {
+            Console.WriteLine("OperaC: " + OperaC);
+            Console.WriteLine("StatuS: " + StatuS);
+            Console.WriteLine("IdentY: " + IdentY);
+            Console.WriteLine("GodziN: " + GodziN);
+            Console.WriteLine("arg1: " + arg1);
+            Console.WriteLine("arg2: " + arg2);
+            Console.WriteLine("arg3: " + arg3);
+            //Console.WriteLine("wynik: " + wynik);
+            Console.WriteLine("NiedoZ: " + NiedoZ);
+            Console.WriteLine("KonieC: " + KonieC);
+            Console.WriteLine(" ");
+        }
+
+        private static string spakuj_pola()
+        {
+            string odpowiedz = string.Empty;
+            GodziN = DateTime.Now.ToLongTimeString();
+            odpowiedz = odpowiedz + "OperaC>>^" + "StatuS>>Odpowiedz^" + "IdentY>>" + IdentY + "^" + "GodziN>>" + GodziN + "^" + "ArguM1>>" + x + "^" + "ArguM2>>" + y + "^" + "ArguM3>>" + z + "^" + "WynikK>>" + w + "^" + "NiedoZ>>" +  NiedoZ + "^"+ "KonieC>>^";
+            return odpowiedz;
+        }
+
+        private static string przydziel_identyfikator()
+        {
+            int iden = 1;
+            bool przypisano_identyfikator = false;
+            while (przypisano_identyfikator == false)
+            {
+                bool czy_jest_na_liscie = false;
+                for (int i = 0; i < id.Count; i++)
+                {
+                    if (iden == id[i])
+                    {
+                        czy_jest_na_liscie = true;
+                    }
+                }
+                if (czy_jest_na_liscie == false)
+                {
+                    id.Add(iden);
+                    przypisano_identyfikator = true;
+                }
+                else
+                {
+                    iden++;
+                }
+            }
+            string idetyfik = iden.ToString();
+            return idetyfik;
+        }
+
+        private static void wyzeruj_pola()
+        {
+            OperaC = string.Empty;
+            StatuS = string.Empty;
+            IdentY = string.Empty;
+            GodziN = string.Empty;
+            arg1 = arg2 = arg3 = wynik = 0;
+            NiedoZ = string.Empty;
+            KonieC = string.Empty;
+        }
+
+        private static void wykonaj_zadanie()
+        {
+            if (OperaC == "Op1")
+            {
+                wynik = arg1 + arg2 + arg3;
+                w = wynik.ToString();
+
+            }
+            else if (OperaC == "Op2")
+            {
+                if (arg2 == 0 || arg3 == 0)
+                {
+                    NiedoZ = "Nie mozna dzielic przez zero!";
+                    wynik = 0;
+                    w = wynik.ToString();
+                }
+                else
+                {
+                    wynik = (arg1 / arg2) / arg3;
+                    w = wynik.ToString();
+                }
+
+            }
+            else if (OperaC == "Op3")
+            {
+                wynik = arg1 - arg2 - arg3;
+                w = wynik.ToString();
+            }
+            else if (OperaC == "Op4")
+            {
+                wynik = arg1 * arg2 * arg3;
+                w = wynik.ToString();
+            }
+            else if(OperaC!="Op1" && OperaC!="Op2" && OperaC!="Op3" && OperaC!="Op4")
+            {
+                NiedoZ = "Bledna nazwa operacji";
+            }
+            GodziN = DateTime.Now.ToLongTimeString();
+        }
+
+        private static void odbierz(string tekst)
+        {
+            for (int i = 0, licznik = 0; i < tekst.Length; i++) //analiza przyjęc=tego komunikatu, czyli przechodzenie forem po całym odebranym tekście.
+            {
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 0)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    while (tekst[i] != '^')
+                    {
+                        OperaC += tekst[i];
+                        i++;
+                    }
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 1)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    while (tekst[i] != '^')
+                    {
+                        StatuS += tekst[i];
+                        i++;
+                    }
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 2)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    while (tekst[i] != '^')
+                    {
+                        IdentY += tekst[i];
+                        i++;
+                    }
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 3)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    while (tekst[i] != '^')
+                    {
+                        GodziN += tekst[i];
+                        i++;
+                    }
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 4)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    x = string.Empty;
+                    while (tekst[i] != '^')
+                    {
+                        x += tekst[i];
+                        i++;
+                    }
+                    arg1 = Convert.ToSingle(x); //konwersja string -> float
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 5)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    y = string.Empty;
+                    while (tekst[i] != '^')
+                    {
+                        y += tekst[i];
+                        i++;
+                    }
+                    arg2 = Convert.ToSingle(y); //konwersja string -> float
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 6)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    z = string.Empty;
+                    while (tekst[i] != '^')
+                    {
+                        z += tekst[i];
+                        i++;
+                    }
+                    arg3 = Convert.ToSingle(z); //konwersja string -> float
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 7)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    w = string.Empty;
+                    while (tekst[i] != '^')
+                    {
+                        w += tekst[i];
+                        i++;
+                    }
+                    wynik = Convert.ToSingle(w); //konwersja string -> float
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 8)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    while (tekst[i] != '^')
+                    {
+                        NiedoZ += tekst[i];
+                        i++;
+                    }
+                    licznik++;
+                }
+                if (tekst[i] == '>' && tekst[i + 1] == '>' && licznik == 9)  //jeżeli przed danym znakiem wystąpiło ">>", to bedzie wczytywana operacja
+                {
+                    i = i + 2;
+                    while (tekst[i] != '^')
+                    {
+                        KonieC += tekst[i];
+                        i++;
+                    }
+                    licznik++;
+                }
+            }
+        }
+
+        private static void OdpowiedzNaWyslanie(IAsyncResult AR)
+        {
+            Socket gniazdo = (Socket)AR.AsyncState;
+            gniazdo.EndSend(AR);
+        }
+    }
+}
